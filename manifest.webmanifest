@@ -1,0 +1,16 @@
+{
+  "name": "信州 道の駅すごろく",
+  "short_name": "道の駅すごろく",
+  "description": "長野県の道の駅54駅をめぐる、桃鉄風のすごろく",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#bfe3f6",
+  "theme_color": "#1f63d6",
+  "lang": "ja",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
