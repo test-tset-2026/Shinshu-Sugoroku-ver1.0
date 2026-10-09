@@ -1516,6 +1516,7 @@ const Sound = {
   init() {
     if (!this.ctx) { try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { this.ctx = null; } }
     if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
+    if (this.ctx && typeof Music !== 'undefined') Music.update();   // 最初のタップでBGMも始める
   },
   tone(freq, dur = 0.1, type = 'square', vol = 0.05, when = 0, slideTo = 0) {
     if (!this.on || !this.ctx) return;
@@ -1531,6 +1532,7 @@ const Sound = {
   },
   seq(notes, type = 'square', vol = 0.05, step = 0.09) { notes.forEach((f, i) => f && this.tone(f, step * 1.1, type, vol, i * step)); },
   play(name) {
+    if (this.ctx && typeof Music !== 'undefined' && (name === 'fanfare' || name === 'kessan')) Music.duck(1.8);   // ファンファーレの間はBGMを小さく
     if (!this.on || !this.ctx) return;
     switch (name) {
       case 'click': this.tone(880, 0.05, 'square', 0.04); break;
@@ -1549,6 +1551,242 @@ const Sound = {
     }
   },
 };
+
+/* 信州 道の駅すごろく — BGM
+   曲はすべてこのゲームのためのオリジナル。音声ファイルは使わず、WebAudio で
+   メロディ・ベース・和音・ドラムをその場で演奏する（効果音と同じ AudioContext を使う）。
+   場面（タイトル／季節／ボンビーぐま／決算）に合わせて、なめらかに曲を切りかえる。 */
+
+const NOTE_IDX = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+function noteFreq(tok) {
+  const m = /^([A-G])(#|b)?(\d)$/.exec(tok);
+  if (!m) return 0;
+  const n = NOTE_IDX[m[1]] + (m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0) + (+m[3] + 1) * 12;
+  return 440 * Math.pow(2, (n - 69) / 12);
+}
+// 楽譜の1文字（音名・ - のばす・ . 休み）を16分音符いくつ分に広げるか
+function expandScore(str, mult) {
+  const out = [];
+  for (const t of str.trim().split(/\s+/)) {
+    if (t === '|') continue;
+    out.push(t);
+    for (let i = 1; i < mult; i++) out.push(t === '.' ? '.' : '-');
+  }
+  return out;
+}
+function compileVoice(tokens) {
+  const ev = new Array(tokens.length).fill(null);
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === '-' || t === '.') continue;
+    let d = 1; while (i + d < tokens.length && tokens[i + d] === '-') d++;
+    ev[i] = { f: noteFreq(t), d };
+  }
+  return ev;
+}
+const CHORD_TONES = {
+  C: ['C4', 'E4', 'G4'], 'C/E': ['G3', 'C4', 'E4'], G: ['B3', 'D4', 'G4'], 'G/B': ['B3', 'D4', 'G4'], Am: ['A3', 'C4', 'E4'], F: ['A3', 'C4', 'F4'],
+  Em: ['B3', 'E4', 'G4'], Dm: ['A3', 'D4', 'F4'], D: ['A3', 'D4', 'F#4'], E7: ['G#3', 'D4', 'E4'], Bb: ['Bb3', 'D4', 'F4'],
+};
+
+// lead: 8分音符で1小節8つ ／ bass: bassMult（4=4分音符, 2=8分音符） ／ chords: 半小節ごとの和音 ／ drums: 1小節16文字
+const SONGS = {
+  title: {   // はじまりの道（行進曲ふう・ト長調）
+    bpm: 140, leadType: 'square', lp: 3400, gate: 0.9, bassMult: 4,
+    lead: `G4 - B4 - D5 - G5 - | E5 - - - C5 - E5 - | F#5 - A5 - F#5 - D5 - | G5 - - - D5 - B4 -
+           E5 - G5 - B5 - G5 - | C6 - - - G5 - E5 - | A5 - F#5 - D5 - C6 - | B5 - - - G5 - . .`,
+    bass: `G2 D3 G2 D3 | C3 G2 C3 G2 | D3 A2 D3 F#2 | G2 D3 G2 B2 | E2 B2 E2 G2 | C3 G2 C3 E3 | D3 A2 D3 F#3 | G2 D3 G2 D3`,
+    chords: 'G G C C D D G G Em Em C C D D G G',
+    drums: { k: 'x.......x.......', s: '....x.......x.xx', h: 'x.x.x.x.x.x.x.x.' },
+  },
+  field: {   // 信州ドライブ（すごろく中・ハ長調）。季節で音色とテンポを変える
+    bpm: 120, leadType: 'square', lp: 3200, gate: 0.85, bassMult: 4,
+    lead: `E5 - G5 - C6 - G5 E5 | D5 - G5 - B5 - A5 G5 | C5 - E5 - A5 - G5 E5 | F5 - - - A5 - G5 -
+           E5 - G5 - C6 - D6 - | B5 - A5 - G5 - D5 - | F5 - A5 - G5 - B4 D5 | C5 - - - - . G4 A4
+           A4 - C5 - F5 - E5 F5 | G5 - - - D5 - B4 - | E5 - G5 - B5 - A5 G5 | A5 - - - E5 - C5 -
+           D5 - F5 - A5 - G5 F5 | G5 - B5 - D6 - B5 G5 | E5 - C6 - A5 - E5 C5 | D5 - F5 - B5 - G5 -`,
+    bass: `C3 G2 C3 G2 | B2 G2 B2 D3 | A2 E2 A2 E2 | F2 C3 F2 C3 | C3 G2 C3 G2 | G2 D3 G2 D3 | F2 C3 G2 D3 | C3 G2 C3 G2
+           F2 C3 F2 A2 | G2 D3 G2 B2 | E2 B2 E2 G2 | A2 E2 A2 C3 | D3 A2 D3 F2 | G2 D3 G2 B2 | C3 G2 A2 E2 | D3 A2 G2 B2`,
+    chords: 'C C G/B G/B Am Am F F C C G G F G C C F F G G Em Em Am Am Dm Dm G G C Am Dm G',
+    drums: { k: 'x.....x.x.......', s: '....x.......x...', h: 'x.x.x.x.x.x.x.x.' },
+    flavors: {
+      spring: {},
+      summer: { bpm: 128, lp: 5200, drums: { k: 'x.....x.x.....x.', s: '....x.......x...', h: 'xxx.xxx.xxx.xxx.' } },
+      autumn: { bpm: 110, leadType: 'sawtooth', lp: 1700, vib: true },
+      winter: { bpm: 102, leadType: 'triangle', lp: 6000, bell: true, vib: true, drums: { k: 'x.......x.......', s: '............x...', h: '' } },
+    },
+  },
+  bear: {    // ボンビーぐまのテーマ（コミカルな短調・イ短調）
+    bpm: 116, leadType: 'square', lp: 2600, gate: 0.45, bassMult: 2,
+    lead: `A4 . C5 . E5 . D#5 E5 | C5 . A4 . . . E4 . | D5 . F5 . A5 . G#5 A5 | G#5 . E5 . B4 . G#4 B4
+           A4 . C5 . E5 . A5 . | F5 . E5 . D5 . C5 . | B4 . D5 . G#5 . F5 E5 | A5 - . . A4 . . .`,
+    bass: `A2 . E3 . A2 . E3 . | A2 . E3 . A2 . E3 . | D3 . A3 . D3 . A3 . | E2 . B2 . E2 . G#2 .
+           A2 . E3 . A2 . E3 . | F2 . C3 . F2 . C3 . | E2 . B2 . E2 . G#2 . | A2 . E3 . A2 . . .`,
+    chords: 'Am Am Am Am Dm Dm E7 E7 Am Am F F E7 E7 Am Am',
+    drums: { k: 'x.......x.......', s: '....x.......x...', h: '' },
+  },
+  kessan: {  // 決算と最終結果（おごそかに・ヘ長調）
+    bpm: 96, leadType: 'triangle', lp: 6000, gate: 0.95, bassMult: 4, vib: true, bell: true,
+    lead: `A4 - - - C5 - F5 - | E5 - - - G5 - C5 - | D5 - F5 - A5 - G5 F5 | F5 - - - D5 - Bb4 -
+           C5 - F5 - A5 - C6 - | G5 - - - E5 - C5 - | D5 - Bb5 - A5 - G5 - | F5 - - - - - . .`,
+    bass: `F2 - C3 - | E2 - C3 - | D2 - A2 - | Bb1 - F2 - | F2 - C3 - | C2 - G2 - | Bb1 - C2 - | F2 - - -`,
+    chords: 'F F C/E C/E Dm Dm Bb Bb F F C C Bb C F F',
+    drums: { k: 'x.......x.......', s: '', h: '' },
+  },
+};
+
+function compileSong(name, flavor) {
+  const base = SONGS[name], fl = (base.flavors && base.flavors[flavor]) || {};
+  const s = { ...base, ...fl };
+  const lead = compileVoice(expandScore(s.lead, 2));
+  const bass = compileVoice(expandScore(s.bass, s.bassMult));
+  const chords = s.chords.split(/\s+/).map(c => (CHORD_TONES[c] || []).map(noteFreq));
+  return { ...s, lead, bass, chords, len: lead.length, stepDur: 60 / s.bpm / 4 };
+}
+
+const Music = {
+  on: true, vol: 0.16, players: [], key: '', timer: null, override: null, master: null, echo: null, noise: null,
+  ensure() {
+    const ctx = Sound.ctx;
+    if (!ctx) return false;
+    if (!this.master) {
+      this.master = ctx.createGain();
+      this.master.gain.value = this.on ? this.vol : 0;
+      this.master.connect(ctx.destination);
+      // ふんわり響かせるエコー
+      const d = ctx.createDelay(1), fb = ctx.createGain(), wet = ctx.createGain();
+      d.delayTime.value = 0.27; fb.gain.value = 0.26; wet.gain.value = 0.2;
+      d.connect(fb); fb.connect(d); d.connect(wet); wet.connect(this.master);
+      this.echo = d;
+      const buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate), ch = buf.getChannelData(0);
+      for (let i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1;
+      this.noise = buf;
+    }
+    if (!this.timer) this.timer = setInterval(() => this.tick(), 25);
+    return true;
+  },
+  setOn(on) {
+    this.on = on;
+    if (!this.master) { if (on) this.update(true); return; }
+    this.master.gain.setTargetAtTime(on ? this.vol : 0, Sound.ctx.currentTime, 0.15);
+    if (on) this.update(true);
+  },
+  // いまの場面にあう曲
+  want() {
+    if (this.override) return this.override;
+    const start = document.getElementById('start');
+    if (typeof G === 'undefined' || !G || (start && !start.hidden)) return 'title';
+    if (G.over) return 'kessan';
+    if (G.bear !== null && G.bear === G.turn) return 'bear';
+    const m = G.month;
+    const season = m >= 4 && m <= 6 ? 'spring' : m >= 7 && m <= 9 ? 'summer' : m >= 10 && m <= 11 ? 'autumn' : 'winter';
+    return 'field:' + season;
+  },
+  update(force) {
+    if (!this.on || !Sound.ctx || !this.ensure()) return;
+    const key = this.want();
+    if (!force && key === this.key) return;
+    this.key = key;
+    this.play(key);
+  },
+  play(key) {
+    const [name, flavor] = key.split(':');
+    const ctx = Sound.ctx, now = ctx.currentTime;
+    for (const p of this.players) if (!p.stopAt) { p.stopAt = now + 0.9; p.bus.gain.setTargetAtTime(0.0001, now, 0.22); }
+    const bus = ctx.createGain();
+    bus.gain.setValueAtTime(0.0001, now);
+    bus.gain.setTargetAtTime(1, now + 0.05, 0.3);
+    bus.connect(this.master);
+    this.players.push({ song: compileSong(name, flavor), bus, step: 0, next: now + 0.1 });
+  },
+  tick() {
+    const ctx = Sound.ctx;
+    if (!ctx || ctx.state !== 'running') return;
+    const now = ctx.currentTime;
+    this.players = this.players.filter(p => { if (p.stopAt && now > p.stopAt) { p.bus.disconnect(); return false; } return true; });
+    for (const p of this.players) {
+      if (p.stopAt) continue;
+      if (p.next < now - 0.25) p.next = now + 0.05;   // バックグラウンドで止まっていたら、まとめて鳴らさず続きから
+      while (p.next < now + 0.15) {
+        this.schedule(p, p.step, p.next);
+        p.next += p.song.stepDur;
+        p.step = (p.step + 1) % p.song.len;
+      }
+    }
+  },
+  // ファンファーレなどのあいだ、BGMを小さくする
+  duck(sec) {
+    if (!this.master || !this.on) return;
+    const g = this.master.gain, now = Sound.ctx.currentTime;
+    g.cancelScheduledValues(now);
+    g.setTargetAtTime(this.vol * 0.2, now, 0.05);
+    g.setTargetAtTime(this.vol, now + sec, 0.35);
+  },
+  schedule(p, i, t) {
+    const S = p.song, dur = S.stepDur, bus = p.bus;
+    const lead = S.lead[i];
+    if (lead) {
+      this.tone(bus, S.leadType, lead.f, t, lead.d * dur * S.gate, 0.11, S.lp, true, S.vib);
+      if (S.bell) this.tone(bus, 'sine', lead.f * 2, t, Math.min(lead.d * dur, 0.4), 0.035, 0, true, false);
+    }
+    const bass = S.bass[i];
+    if (bass) this.tone(bus, 'triangle', bass.f, t, bass.d * dur * 0.92, 0.17, 0, false, false);
+    const bi = i % 16;
+    if (bi % 4 === 2) for (const f of S.chords[Math.floor(i / 8)] || []) this.tone(bus, 'square', f, t, dur * 1.3, 0.02, 1900, false, false);
+    const D = S.drums;
+    if (D.k[bi] === 'x') this.kick(bus, t);
+    if (D.s[bi] === 'x') this.snare(bus, t);
+    if (D.h[bi] === 'x') this.hat(bus, t);
+  },
+  tone(dest, type, f, t, len, gain, lp, echo, vib) {
+    const ctx = Sound.ctx;
+    const o = ctx.createOscillator();
+    o.type = type; o.frequency.setValueAtTime(f, t);
+    if (vib) {
+      const lfo = ctx.createOscillator(), lg = ctx.createGain();
+      lfo.frequency.value = 5.5; lg.gain.value = f * 0.007;
+      lfo.connect(lg); lg.connect(o.frequency); lfo.start(t + 0.12); lfo.stop(t + len + 0.3);
+    }
+    let node = o;
+    if (lp) { const fl = ctx.createBiquadFilter(); fl.type = 'lowpass'; fl.frequency.value = lp; o.connect(fl); node = fl; }
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.012);
+    g.gain.setTargetAtTime(gain * 0.65, t + 0.03, 0.09);
+    g.gain.setTargetAtTime(0.0001, t + Math.max(0.03, len), 0.035);
+    node.connect(g); g.connect(dest);
+    if (echo) g.connect(this.echo);
+    o.start(t); o.stop(t + len + 0.35);
+  },
+  kick(dest, t) {
+    const ctx = Sound.ctx, o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+    g.gain.setValueAtTime(0.42, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+    o.connect(g); g.connect(dest); o.start(t); o.stop(t + 0.22);
+  },
+  noiseHit(dest, t, hp, gain, len) {
+    const ctx = Sound.ctx, src = ctx.createBufferSource(), fl = ctx.createBiquadFilter(), g = ctx.createGain();
+    src.buffer = this.noise; fl.type = 'highpass'; fl.frequency.value = hp;
+    g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.001, t + len);
+    src.connect(fl); fl.connect(g); g.connect(dest); src.start(t, Math.random() * 0.5); src.stop(t + len + 0.02);
+  },
+  snare(dest, t) {
+    this.noiseHit(dest, t, 1500, 0.16, 0.13);
+    const ctx = Sound.ctx, o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'triangle'; o.frequency.setValueAtTime(190, t);
+    g.gain.setValueAtTime(0.08, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    o.connect(g); g.connect(dest); o.start(t); o.stop(t + 0.1);
+  },
+  hat(dest, t) { this.noiseHit(dest, t, 7000, 0.045, 0.035); },
+};
+
+// 画面が裏に回ったら音を止め、もどったら再開する（電池の節約）
+document.addEventListener('visibilitychange', () => {
+  const ctx = Sound.ctx;
+  if (!ctx) return;
+  if (document.hidden) ctx.suspend().catch(() => {});
+  else ctx.resume().catch(() => {});
+});
 
 /* 信州 道の駅すごろく — オンライン対戦
    各プレイヤーは「自分の状態（presence）」を部屋に出し、全員の presence を受け取る。
@@ -2474,13 +2712,13 @@ let UI = {};             // SVGレイヤー
 let MM = null;           // 全体図の座標変換
 let stageScale = 1;
 const TOK = [];          // 各社長のコマ（SVG要素）
-const Settings = { speed: 'normal', sound: true, nick: '' };
+const Settings = { speed: 'normal', sound: true, bgm: true, nick: '' };
 
 const online = () => Net.mode !== 'local';
 const isHost = () => Net.mode === 'host';
 const isGuest = () => Net.mode === 'guest';
 
-function loadSettings() { try { Object.assign(Settings, JSON.parse(localStorage.getItem(SET_KEY) || '{}')); } catch (e) { /* 保存できない環境 */ } Sound.on = Settings.sound; }
+function loadSettings() { try { Object.assign(Settings, JSON.parse(localStorage.getItem(SET_KEY) || '{}')); } catch (e) { /* 保存できない環境 */ } Sound.on = Settings.sound; Music.on = Settings.bgm !== false; }
 function saveSettings() { try { localStorage.setItem(SET_KEY, JSON.stringify(Settings)); } catch (e) { /* noop */ } }
 function saveGame() { if (!G || G.over || online()) return; try { localStorage.setItem(SAVE_KEY, JSON.stringify({ ...G, nodeCount: Board.nodes.length })); } catch (e) { /* noop */ } }
 function readSave() {
@@ -2750,6 +2988,7 @@ function refresh() {
   G.players.forEach(p => { const n = Board.nodes[p.pos]; const [x, y] = mm(n.x, n.y); over += `<circle cx="${x + (p.idx % 2 ? 2 : -2)}" cy="${y + (p.idx > 1 ? 2 : -2)}" r="3.6" fill="${def(p).color}" stroke="#fff" stroke-width="1.4"/>`; });
   $('#mm-over').innerHTML = over;
   refreshHud();
+  Music.update();
 }
 
 function uiMascot(html) { $('#bubble').innerHTML = html; }
@@ -2958,6 +3197,7 @@ function otherMenu() {
   const canSpeed = !isGuest();
   const dlg = openModal(`<div class="dlg-h">その他${online() ? `<span class="sub">オンライン対戦・部屋 ${Net.code}</span>` : ''}</div><div class="dlg-b"><div class="opts">
     <div class="opt-row"><span class="lbl">ゲームの速さ</span><button class="chip ${spdName() === 'normal' ? 'on' : ''}" data-speed="normal" ${canSpeed ? '' : 'disabled'}>ふつう</button><button class="chip ${spdName() === 'fast' ? 'on' : ''}" data-speed="fast" ${canSpeed ? '' : 'disabled'}>はやい</button>${canSpeed ? '' : '<span class="desc">ホストが決めます</span>'}</div>
+    <div class="opt-row"><span class="lbl">BGM</span><button class="chip ${Settings.bgm !== false ? 'on' : ''}" data-bgm="1">ON</button><button class="chip ${Settings.bgm === false ? 'on' : ''}" data-bgm="0">OFF</button></div>
     <div class="opt-row"><span class="lbl">効果音</span><button class="chip ${Settings.sound ? 'on' : ''}" data-sound="1">ON</button><button class="chip ${!Settings.sound ? 'on' : ''}" data-sound="0">OFF</button></div>
     <div class="opt-row"><button class="btn" data-rank ${G ? '' : 'disabled'}>資産ランキング</button><button class="btn" data-rules>あそびかた</button>
       <button class="btn red" data-title ${G || online() ? '' : 'disabled'}>${online() ? (isHost() ? '部屋を閉じる' : '部屋を出る') : 'タイトルにもどる'}</button></div>
@@ -2966,6 +3206,7 @@ function otherMenu() {
     </div></div><div class="dlg-f"><button class="btn gray" data-close>とじる</button></div>`, { info: true });
   dlg.querySelectorAll('[data-speed]').forEach(b => b.onclick = () => { Settings.speed = b.dataset.speed; saveSettings(); if (isHost()) { Net.speed = Settings.speed; hostPush(); } closeModal(); otherMenu(); });
   dlg.querySelectorAll('[data-sound]').forEach(b => b.onclick = () => { Settings.sound = b.dataset.sound === '1'; Sound.on = Settings.sound; Sound.init(); saveSettings(); closeModal(); otherMenu(); });
+  dlg.querySelectorAll('[data-bgm]').forEach(b => b.onclick = () => { Settings.bgm = b.dataset.bgm === '1'; saveSettings(); Sound.init(); Music.setOn(Settings.bgm); closeModal(); otherMenu(); });
   dlg.querySelector('[data-rank]').onclick = () => { closeModal(); rankingDialog(); };
   dlg.querySelector('[data-rules]').onclick = () => { closeModal(); rulesDialog(); };
   dlg.querySelector('[data-title]').onclick = () => { if (online()) leaveOnline(); else { saveGame(); location.reload(); } };
@@ -3651,6 +3892,7 @@ async function settlement() {
   await showSettlement(incomes, monies, online() || !G.players.some(q => q.human));
 }
 function showSettlement(incomes, monies, auto) {
+  Music.override = 'kessan'; Music.update();
   return new Promise(resolve => {
     const dlg = openModal(`<div class="dlg-h">${G.year}年目 決算<span class="sub">物件の収益</span></div>
       <div class="dlg-b"><table class="ptable">${G.players.map((p, i) => `<tr><td style="width:70px">${charSVG(def(p).char, 52)}</td><td class="pn" style="color:${def(p).dark}">${def(p).name}${seatNick(i) ? `<br><small>${esc(seatNick(i))}</small>` : ''}</td>
@@ -3658,7 +3900,7 @@ function showSettlement(incomes, monies, auto) {
         <p class="desc">独占している駅の物件は収益が2倍になっています。</p></div>
       <div class="dlg-f"><button class="btn" data-close>つぎへ</button></div>`);
     let done = false;
-    const fin = () => { if (done) return; done = true; closeModal(); resolve(); };
+    const fin = () => { if (done) return; done = true; closeModal(); Music.override = null; Music.update(); resolve(); };
     dlg.querySelector('[data-close]').onclick = fin;
     if (auto) setTimeout(fin, spd(4200));
   });
@@ -3922,6 +4164,7 @@ function showStart() {
   $('#b-join').onclick = () => join($('#in-code').value.trim());
   $('#in-code').addEventListener('keydown', e => { if (e.key === 'Enter') join($('#in-code').value.trim()); });
   if (back) $('#b-back').onclick = () => join(String(back.code), back.pass);
+  Music.update();
 }
 
 function newGame({ years, humans }) {
